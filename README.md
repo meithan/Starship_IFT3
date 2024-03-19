@@ -1,6 +1,6 @@
-# Starship_IFT2
+# Starship_IFT3
 
-Flight variables of SpaceX Starship's IFT2 estimated from the live telemetry
+Flight variables of SpaceX Starship's IFT3 estimated from the live telemetry
 
 Latest plot:
 
