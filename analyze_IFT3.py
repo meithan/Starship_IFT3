@@ -4,66 +4,52 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 from math import cos, radians
-from scipy.signal import savgol_filter
 
 sys.path.append("/home/meithan/owncloud/orbits")
 from ISA1976.ISA1976 import ISA1976
 from Orbits import Orbit
 from Orbits.SolarSystem import Earth
+from common import *
 
 # ==============================================================================
+
+# Select which telemetry to analyze
+# selected = "ship"
+selected = "booster"
+
+if selected == "ship":
+  # Second stage (Ship) telemetry (ascent)
+  data_fname = "data/IFT3_telemetry_ship.csv"
+  events = [
+    ["Max Q", 60],
+    ["MECO", 60*2 + 42],
+    ["Stage sep", 60*2 + 48],
+    ["SECO1", 60*8 + 21],
+    ["SECO2", 60*8 + 35],
+  ]
+elif selected == "booster":
+  # First stage (Booster) telemetry
+  data_fname = "data/IFT3_telemetry_booster.csv"
+  events = [
+    ["Max Q", 60],
+    ["MECO", 60*2 + 42],
+    ["Stage sep", 60*2 + 48],
+    ["Boostback start", 60*2 + 54],
+    ["Boostback end", 60*3 + 48],
+    ["Gridfins live", 60*6 + 5],
+    ["Landing burn", 60*6 + 54],
+  ]
 
 save = "--save" in sys.argv
-
-combined_plot = False
-
-events = [
-  ["Max Q", 60],
-  ["MECO", 60*2 + 42],
-  ["Stage sep", 60*2 + 48],
-  ["SECO1", 60*8 + 21],
-  ["SECO2", 60*8 + 35],
-]
-
-color_event_line = "0.8"
-color_event_label = "0.3"
+combined_plot = True
+color_event_line = "0.9"
+color_event_label = "0.5"
 
 # ==============================================================================
 
-def parse_float(s):
-  try:
-    return(float(s))
-  except:
-    return np.nan
-
-def moving_average(x, w):
-  return np.convolve(x, np.ones(w), "same") / w
-
-def impute_missing_values(xs, ys):
-  i = 0
-  while i < len(xs):
-    if np.isnan(ys[i]):
-      i0 = i-1; i1 = i; i2 = i
-      while np.isnan(ys[i]):
-        i2 = i
-        i += 1
-      i3 = i2 + 1
-      deriv = (ys[i3]-ys[i0])/(xs[i3]-xs[i0])
-      for j in range(i1, i2+1):
-        dx = xs[j] - xs[i0]
-        ys[j] = ys[i0] + dx*deriv
-    i += 1
-
-def smoothen(values):
-  # return moving_average(values, 30)
-  return savgol_filter(values, 5, 1)
-
-# ==============================================================================
- 
 # Load data (own scraping)
-fname = "data/IFT3_telemetry.csv"
 raw_data = []
-with open(fname) as f:
+with open(data_fname) as f:
   reader = csv.reader(f)
   header = next(reader)
   # print(header)
@@ -84,30 +70,31 @@ impute_missing_values(time, raw_altitude)
 impute_missing_values(time, raw_speed)
 
 # Smoothen raw data
-altitude = savgol_filter(raw_altitude, 21, 1)
+altitude = np.clip(savgol_filter(raw_altitude, 21, 1), 0, None)
 speed = savgol_filter(raw_speed, 3, 1)
 
 # plt.figure()
 # plt.title("Altitude")
-# plt.plot(raw_altitude, "o")
-# plt.plot(altitude, "-")
+# plt.plot(raw_altitude, "o", color="k", alpha=0.3, mfc="none")
+# plt.plot(altitude, "-", color="r")
 # plt.figure()
 # plt.title("Speed")
-# plt.plot(raw_speed, "o", color="k", alpha=0.4, mfc="none")
-# plt.plot(speed, "-")
+# plt.plot(raw_speed, "o", color="k", alpha=0.3, mfc="none")
+# plt.plot(speed, "-", color="r")
 # plt.show()
 
-# Speed in inertial Earth-centered frame
-vrot = 465*cos(radians(18))
-
 # Acceleration
-accel = np.gradient(savgol_filter(raw_speed, 31, 1), time)
+# accel = np.gradient(savgol_filter(raw_speed, 31, 1), time)
+accel = np.gradient(speed, time)
 accel = smoothen(accel)
 
 # Speed components
 vspeed = np.gradient(savgol_filter(altitude, 31, 1), time)
-# vspeed = moving_average(vspeed, 30)
-hspeed = np.sqrt(np.clip(speed**2 - moving_average(vspeed, 30)**2, 0, None))
+vspeed = moving_average(vspeed, 30)
+# hspeed = np.sqrt(np.clip(speed**2 - moving_average(vspeed, 30)**2, 0, None))
+hspeed = np.sqrt(np.clip(speed**2 - vspeed**2, 0, None))
+if selected == "booster":
+  hspeed[time > 220] *= -1
 # hspeed = np.sqrt(np.clip(raw_speed**2 - vspeed**2, 0, None))
 speed_numer = np.sqrt(hspeed**2 + vspeed**2)
 
@@ -162,6 +149,7 @@ dynpres = np.array(dynpres)
 
 # Orbital state vectors (position and velocity vectors)
 # The trajectory is assumed to be contained in a vertical xy plane
+vrot = 465*cos(radians(18))
 hspeed2 = np.sqrt(np.clip(raw_speed**2 - vspeed**2, 0, None))
 pos_orb = []; vel_orb = []
 for i in range(len(time)):
@@ -199,7 +187,7 @@ if combined_plot:
   cols = 3
   subplot = 1
 
-# -----------------------
+# ------------------------------------------------------------------------------
 # Altitude & speed
 
 if combined_plot:
@@ -222,11 +210,15 @@ plt.gca().yaxis.label.set_color(color)
 plt.grid(ls=":")
 
 # Events
-label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}}  
+if selected == "ship":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}}  
+elif selected == "booster":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.2, -15), "Stage sep": (0.3, -15), "Boostback start": (0.2, 3), "Boostback end": {0.5, 3}, "Gridfins live": (0.8,3), "Landing burn": (0.8,3)}
+bbox = dict(pad=1, color="w", alpha=0.5)
 for label, t in events:
   y, xoff = label_pos[label]
   plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
-  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label)
+  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label, bbox=bbox)
 
 # Speed
 ax2 = plt.twinx()
@@ -238,16 +230,20 @@ plt.gca().spines['left'].set_visible(False)
 plt.gca().spines['right'].set_color(color)
 plt.gca().tick_params(axis='y', colors=color)
 plt.gca().yaxis.label.set_color(color)
-plt.legend(handles=[ln1,ln2])
+plt.legend(handles=[ln1,ln2], loc="upper left")
 
 if not combined_plot:
   plt.tight_layout()
   if save:
-    fname = "plots/alt_speed.png"
+    if selected == "ship":
+      fname = "plots/ship_"
+    elif selected == "booster":
+      fname = "plots/booster_"    
+    fname += "alt_speed.png"
     plt.savefig(fname)
     print("Wrote", fname)
 
-# -----------------------
+# ------------------------------------------------------------------------------
 # Accelerations
 
 if combined_plot:
@@ -255,6 +251,7 @@ if combined_plot:
 else:
   plt.figure(figsize=(8,6))
 
+# Main axis
 color = "C3"
 plt.plot(time, accel_numer, color=color, label="Total")
 # plt.plot(time, accel, color=color, label="Total")
@@ -263,7 +260,7 @@ plt.plot(time, vaccel, lw=1, color="C1", label="Vertical")
 plt.xlabel("Time [s]")
 plt.ylabel("Acceleration [m/s²]")
 plt.title("Acceleration")
-plt.legend()
+plt.legend(loc="upper left")
 plt.axhline(0, color="gray", zorder=-10)
 plt.gca().spines['left'].set_color(color)
 plt.gca().tick_params(axis='y', colors=color)
@@ -271,6 +268,18 @@ plt.gca().yaxis.label.set_color(color)
 plt.grid(ls=":")
 y1, y2 = plt.ylim()
 
+# Events
+if selected == "ship":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}}
+elif selected == "booster":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.1, -15), "Stage sep": (0.2, -15), "Boostback start": (0.1, 3), "Boostback end": {0.8, 3}, "Gridfins live": (0.8,3), "Landing burn": (0.2,3)}
+bbox = dict(pad=1, color="w", alpha=0.5)
+for label, t in events:
+  y, xoff = label_pos[label]
+  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
+  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label, bbox=bbox)
+
+# Secondary axis
 ax2 = plt.twinx()
 plt.ylim(y1/9.806, y2/9.806)
 plt.gca().spines['right'].set_color(color)
@@ -279,22 +288,18 @@ plt.gca().tick_params(axis='y', colors=color)
 plt.gca().yaxis.label.set_color(color)
 plt.ylabel("Acceleration [gees]")
 
-# Events
-color = "0.3"
-label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}}
-for label, t in events:
-  y, xoff = label_pos[label]
-  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
-  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label)
-
 if not combined_plot:
   plt.tight_layout()
   if save:
-    fname = "plots/accels.png"
+    if selected == "ship":
+      fname = "plots/ship_"
+    elif selected == "booster":
+      fname = "plots/booster_"
+    fname += "accels.png"
     plt.savefig(fname)
     print("Wrote", fname)
 
-# -----------------------
+# ------------------------------------------------------------------------------
 # Velocity components
 
 if combined_plot:
@@ -302,47 +307,62 @@ if combined_plot:
 else:
   plt.figure(figsize=(8,6))
 
+# Main axis
 plt.plot(time, speed_numer/1e3, color="0.5", label="Magnitude")
 plt.plot(time, hspeed/1e3, color="C0", label="Horizontal")
 plt.plot(time, vspeed/1e3, color="C1", label="Vertical")
 y1, y2 = plt.ylim()
-plt.legend()
+plt.legend(loc="upper left")
 plt.axhline(0, color="gray", zorder=-10)
 plt.xlabel("Time [s]")
 plt.ylabel("Speed [km/s]")
 plt.title("Velocity components")
 plt.grid(ls=":")
 
+# Events
+if selected == "ship":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}} 
+elif selected == "booster":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.1, -15), "Stage sep": (0.2, -15), "Boostback start": (0.1, 3), "Boostback end": {0.8, 3}, "Gridfins live": (0.83,3), "Landing burn": (0.81, 3)}
+bbox = dict(pad=1, color="w", alpha=0.5)
+for label, t in events:
+  y, xoff = label_pos[label]
+  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
+  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label, bbox=bbox)
+
+# Secondary axis
 ax2 = plt.twinx()
 plt.ylim(y1*3600, y2*3600)
 plt.ylabel("Speed [km/h]")
 
-# Events
-color = "0.3"
-label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}}  
-for label, t in events:
-  y, xoff = label_pos[label]
-  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
-  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label)
-
 if not combined_plot:
   plt.tight_layout()
   if save:
-    fname = "plots/velocity.png"
+    if selected == "ship":
+      fname = "plots/ship_"
+    elif selected == "booster":
+      fname = "plots/booster_"
+    fname += "velocity.png"
     plt.savefig(fname)
     print("Wrote", fname)
 
-# -----------------------
-# Trajectory
+# ------------------------------------------------------------------------------
+# Trajectory profile
 
 if combined_plot:
   plt.subplot(rows,cols,subplot); subplot += 1
 else:
   plt.figure(figsize=(8,6))
 
+# Main plot
 plt.plot(hdist/1e3, altitude/1e3, color="k")
+
+# Dots and labels
 next_dot = 0; next_text = 60
-texts_pos = {60: (5,-5), 120: (5,-2), 180: (5,-2), 240: (5,-2), 300: (5,-7), 360: (-5,-12), 420: (-16,-12), 480: (-15,-12)}
+if selected == "ship":
+  texts_pos = {60: (25,-5), 120: (25,-2), 180: (25,-2), 240: (25,-2), 300: (25,-7), 360: (0,-15), 420: (0,-15), 480: (0,-15)}
+elif selected == "booster":
+  texts_pos = {60: (23,0), 120: (27,0), 180: (5,-15), 240: (5,10), 300: (-25,0), 360: (-25,0), 420: (-23,8)}
 for i in range(len(time)):
   x, y = hdist[i]/1e3, altitude[i]/1e3
   if time[i] >= next_dot:
@@ -350,13 +370,17 @@ for i in range(len(time)):
     if time[i] >= next_text:
       text = f"{time[i]:.0f} s"
       pos = texts_pos[next_text]
-      plt.annotate(text, xy=(x,y), xytext=pos, textcoords="offset pixels", va="center", fontsize=10, color=color_event_label)
+      plt.annotate(text, xy=(x,y), xytext=pos, textcoords="offset pixels", va="center", ha="center", fontsize=10, color=color_event_label)
       next_text += 60
     plt.scatter([x], [y], color="k", s=s)
     next_dot += 10
 
 # Events
 color = "0.3"
+if selected == "ship":
+  offsets = {"Max Q": (30, 30), "MECO": (30, -10), "Stage sep": (30, 0), "SECO1": (-20, -30), "SECO2": (-20, -25)}
+elif selected == "booster":
+  offsets = {"Max Q": (30, 30), "MECO": (-60, 30), "Stage sep": (-70, 35), "Boostback start": (-90, 40), "Boostback end": (-130, 30), "Gridfins live": (-120, 0), "Landing burn": (30, 10)}
 for label, t in events:
   found = False
   for i in range(len(time)-1):
@@ -366,40 +390,53 @@ for label, t in events:
       break
   if not found:
     x, y = hdist[-1]/1e3, altitude[-1]/1e3
-  xoff = 30; yoff = 0
-  if label == "Max Q":
-    yoff = 30
-  elif label == "SECO1":
-    xoff, yoff = -20, -30
-  elif label == "SECO2":
-    xoff, yoff = -20, -20
-  plt.annotate(label, xy=(x,y), xytext=(xoff,yoff), textcoords="offset pixels", va="top", fontsize=10, color=color_event_label, arrowprops=dict(arrowstyle="->", color=color))
+  xoff, yoff = 30, 0
+  if label in offsets:
+    xoff, yoff = offsets[label]
+  plt.annotate(label, xy=(x,y), xytext=(xoff, yoff), textcoords="offset pixels", va="top", fontsize=10, color=color_event_label, arrowprops=dict(arrowstyle="->", color=color))
 
 plt.annotate("Dots every 10 seconds", xy=(0.01, 0.99), ha="left", va="top", fontsize=10, xycoords="axes fraction", color="0.5")
 plt.axhline(0, color="gray", zorder=-10)
 x1, x2 = plt.xlim()
-plt.ylim(-1, 155)
+if selected == "ship":
+  plt.ylim(-1, 155)
+elif selected == "booster":
+  plt.ylim(-1, 120)
 plt.grid(ls=":")
 plt.title("Trajectory profile")
 plt.xlabel("Downrange distance [km]")
 plt.ylabel("Altitude [km]")
 # plt.gca().set_aspect("equal")
 
-
 if not combined_plot:
   plt.tight_layout()
   if save:
-    fname = "plots/trajectory.png"
+    if selected == "ship":
+      fname = "plots/ship_"
+    elif selected == "booster":
+      fname = "plots/booster_"    
+    fname += "trajectory.png"
     plt.savefig(fname)
     print("Wrote", fname)
 
-# -----------------------
+# ------------------------------------------------------------------------------
 # Mach number & dynamic pressure
 
 if combined_plot:
   plt.subplot(rows,cols,subplot); subplot += 1
 else:
   plt.figure(figsize=(8,6))
+
+# Events
+if selected == "ship":
+  label_pos = {"Max Q": (0.5, -15), "MECO": (0.5, -15), "Stage sep": (0.5, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 0}}  
+elif selected == "booster":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.1, -15), "Stage sep": (0.2, -15), "Boostback start": (0.1, 3), "Boostback end": {0.8, 3}, "Gridfins live": (0.83,3), "Landing burn": (0.81, 3)}
+bbox = dict(pad=1, color="w", alpha=0.5)
+for label, t in events:
+  y, xoff = label_pos[label]
+  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
+  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label, bbox=bbox)
 
 # Mach number
 color = "C4"
@@ -422,36 +459,45 @@ plt.gca().spines['left'].set_visible(False)
 plt.gca().spines['right'].set_color(color)
 plt.gca().tick_params(axis='y', colors=color)
 plt.gca().yaxis.label.set_color(color)
-plt.legend(handles=[ln1,ln2], loc="upper right")
-
-# Events
-color = "0.3"
-label_pos = {"Max Q": (0.5, -15), "MECO": (0.5, -15), "Stage sep": (0.5, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 0}}  
-for label, t in events:
-  y, xoff = label_pos[label]
-  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
-  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label)
+if selected == "ship": loc = "upper right"
+elif selected == "booster": loc = "upper left"
+plt.legend(handles=[ln1,ln2], loc=loc)
 
 if not combined_plot:
   plt.tight_layout()
   if save:
-    fname = "plots/mach_dynpres.png"
+    if selected == "ship":
+      fname = "plots/ship_"
+    elif selected == "booster":
+      fname = "plots/booster_"
+    fname += "mach_dynpres.png"
     plt.savefig(fname)
     print("Wrote", fname)
 
-# -----------------------
+# ------------------------------------------------------------------------------
 # Specific orbital energy & perigee
 if combined_plot:
   plt.subplot(rows,cols,subplot); subplot += 1
 else:
   plt.figure(figsize=(8,6))
 
+# Events
+if selected == "ship":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}} 
+elif selected == "booster":
+  label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.80, -15), "Boostback start": (0.7, 3), "Boostback end": {0.7, 3}, "Gridfins live": (0.7,3), "Landing burn": (0.7, 3)}
+bbox = dict(pad=1, color="w", alpha=0.5)
+for label, t in events:
+  y, xoff = label_pos[label]
+  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
+  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label, bbox=bbox)
+
 # Orbital energy
 color = "C5"
 ln1, = plt.plot(time, energy/1e6, color=color, label="Orbital energy")
-plt.axhline(E_surf/1e6, ls="-", color=color)
+plt.axhline(E_surf/1e6, ls="--", color=color)
 plt.annotate("Energy at surface", xy=(0.98, E_surf/1e6), xycoords=("axes fraction", "data"), xytext=(0, 5), textcoords="offset pixels", color=color, ha="right")
-plt.axhline(E_orbit/1e6, ls="-", color=color)
+plt.axhline(E_orbit/1e6, ls="--", color=color)
 plt.annotate("Energy for 150 km orbit", xy=(0.98, E_orbit/1e6), xycoords=("axes fraction", "data"), xytext=(0, 5), textcoords="offset pixels", color=color, ha="right")
 plt.xlabel("Time [s]")
 plt.ylabel("Specific orbital energy [MJ/kg]")
@@ -474,65 +520,48 @@ plt.gca().tick_params(axis='y', colors=color)
 plt.gca().yaxis.label.set_color(color)
 plt.legend(handles=[ln1,ln2], loc="upper left")
 
-# Events
-color = "0.3"
-label_pos = {"Max Q": (0.7, -15), "MECO": (0.7, -15), "Stage sep": (0.7, 3), "SECO1": (0.5, -15), "SECO2": {0.5, 2}}  
-for label, t in events:
-  y, xoff = label_pos[label]
-  plt.axvline(t, ls="--", color=color_event_line, zorder=-10)
-  plt.annotate(label, xy=(t, y), xycoords=("data", "axes fraction"), xytext=(xoff, 0), textcoords="offset pixels", rotation=90, color=color_event_label)
-
 if not combined_plot:
   plt.tight_layout()
   if save:
-    fname = "plots/energy_perigee.png"
+    if selected == "ship":
+      fname = "plots/ship_"
+    elif selected == "booster":
+      fname = "plots/booster_"
+    fname += "energy_perigee.png"
     plt.savefig(fname)
     print("Wrote", fname)
 
-# -----------------------
+# ------------------------------------------------------------------------------
 
 if save:
 
   # Save all computed data to file
-  out_fname = "data/IFT3_full_data.csv"
+  if selected == "ship":
+    out_fname = "data/IFT3_full_data_ship.csv"
+  elif selected == "booster":
+    out_fname = "data/IFT3_full_data_booster.csv"
   fout = open(out_fname, "w")
-  strings = [
-    "Time [s]",
-    "Raw altitude [km]",
-    "Raw speed [m/s]",
-    "Smoothed altitude [km]",
-    "Smoothed speed [m/s]",
-    "Downrange distance [km]",
-    "Horizontal speed [m/s]",
-    "Vertical speed [m/s]",
-    "Total acceleration [m/s^2]",
-    "Horizontal acceleration [m/s^2]",
-    "Vertical acceleration [m/s^2]",
-    "Mach number",
-    "Dynamic pressure [kPa]",
-    "Specific orbital energy [MJ/kg]",
-    "Perigee altitude [km]",
+  variables = [
+    ("Time [s]", time, ".0f"),
+    ("Raw altitude [km]", raw_altitude/1e3, ".0f"),
+    ("Raw speed [m/s]", raw_speed, ".0f"),
+    ("Smoothed altitude [km]", altitude/1e3, ".1f"),
+    ("Smoothed speed [m/s]", speed, ".1f"),
+    ("Downrange distance [km]", hdist/1e3, ".1f"),
+    ("Horizontal speed [m/s]", hspeed, ".1f"),
+    ("Vertical speed [m/s]", vspeed, ".1f"),
+    ("Total acceleration [m/s^2]", accel_numer, ".1f"),
+    ("Horizontal acceleration [m/s^2]", haccel, ".1f"),
+    ("Vertical acceleration [m/s^2]", vaccel, ".1f"),
+    ("Mach number", Mach, ".1f"),
+    ("Dynamic pressure [kPa]", dynpres/1e3, ".1f"),
+    ("Specific orbital energy [MJ/kg]", energy/1e6, ".1f"),
+    ("Perigee altitude [km]", perigee, ".1f"),
   ]
-  fout.write(",".join(strings)+"\n")
+  fout.write(",".join(name for name, _, _ in variables) + "\n")
   for i in range(len(time)):
-    strings = [
-      f"{time[i]:.0f}",
-      f"{raw_altitude[i]/1e3:.0f}",
-      f"{raw_speed[i]:.0f}",
-      f"{altitude[i]/1e3:.1f}",
-      f"{speed[i]:.1f}",
-      f"{hdist[i]/1e3:.1f}",
-      f"{hspeed[i]:.1f}",
-      f"{vspeed[i]:.1f}",    
-      f"{accel_numer[i]:.1f}",
-      f"{haccel[i]:.1f}",
-      f"{vaccel[i]:.1f}",
-      f"{Mach[i]:.1f}",
-      f"{dynpres[i]/1e3:.1f}",
-      f"{energy[i]/1e6:.1f}",
-      f"{perigee[i]:.1f}",
-    ]
-    fout.write(",".join(strings)+"\n")
+    values = ["{value:{format}}".format(value=var[i], format=fmt) for _, var, fmt in variables]
+    fout.write(",".join(values) + "\n")
   fout.close()
   print("Wrote", out_fname)
 
@@ -545,7 +574,10 @@ if combined_plot:
   plt.annotate("@meithan42", color="0.9", xy=(0.65, 0.5), xycoords="figure fraction", va="center", rotation=90)
 
   if save:
-    fname = "plots/IFT3_combined.png"
+    if selected == "ship":
+      fname = "plots/IFT3_combined_ship.png"
+    elif selected == "booster":
+      fname = "plots/IFT3_combined_booster.png"
     plt.savefig(fname)
     print("Wrote", fname)
   else:

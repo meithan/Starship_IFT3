@@ -1,4 +1,4 @@
-Time (m),Time (s),Speed (km/h),Altitude (km)
+Time (min),Time (ssec),Speed (km/h),Altitude (km)
 0,0,0,0
 0,1,0,0
 0,2,0,0
